@@ -1,0 +1,40 @@
+File Processing
+===============
+
+.. automodule:: dynamicdl.processing.jsonfile
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: dynamicdl.processing.csvfile
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: dynamicdl.processing.txtfile
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: dynamicdl.processing.xmlfile
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: dynamicdl.processing.yamlfile
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: dynamicdl.processing.images
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Module contents
+---------------
+
+.. automodule:: dynamicdl.processing
+   :members:
+   :undoc-members:
+   :show-inheritance:

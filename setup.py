@@ -1,8 +1,8 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='dynamicdl-headless',
-    version='0.1.0-alpha',
+    name='dynamicdl',
+    version='0.1.1-alpha',
     packages=find_packages(),
     license='Apache License 2.0',
     author='Anthony Tong',
@@ -25,4 +25,5 @@ setup(
         "jsonpickle>=3.0.0,<=3.1.0",
         "matplotlib>=3.6.0,<=3.8.4"
     ],
+    include_package_data=True
 )

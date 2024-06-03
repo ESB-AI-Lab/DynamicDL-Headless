@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" data-content_root="../../../">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>dynamicdl.parsing.impliedlist &mdash; DynamicDL 0.1.1-alpha documentation</title>
+      <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=80d5e7a1" />
+      <link rel="stylesheet" type="text/css" href="../../../_static/css/theme.css?v=19f00094" />
+
+  
+  <!--[if lt IE 9]>
+    <script src="../../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script src="../../../_static/documentation_options.js?v=e30984f2"></script>
+        <script src="../../../_static/doctools.js?v=9a2dae69"></script>
+        <script src="../../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../../../index.html" class="icon icon-home">
+            DynamicDL
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../tutorial.html">DynamicData Tutorial</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../dynamicdl.html">DynamicDL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../data.html">Data Items</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../parsing.html">Parsing Structures</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../processing.html">File Processing</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">DynamicDL</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../index.html">Module code</a></li>
+      <li class="breadcrumb-item active">dynamicdl.parsing.impliedlist</li>
+      <li class="wy-breadcrumbs-aside">
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <h1>Source code for dynamicdl.parsing.impliedlist</h1><div class="highlight"><pre>
+<span></span><span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Union</span><span class="p">,</span> <span class="n">Any</span>
+
+<span class="kn">from</span> <span class="nn">.._warnings</span> <span class="kn">import</span> <span class="n">Warnings</span>
+<span class="kn">from</span> <span class="nn">..data.datatype</span> <span class="kn">import</span> <span class="n">DataType</span>
+<span class="kn">from</span> <span class="nn">.genericlist</span> <span class="kn">import</span> <span class="n">GenericList</span>
+<span class="kn">from</span> <span class="nn">.static</span> <span class="kn">import</span> <span class="n">Static</span>
+
+<div class="viewcode-block" id="ImpliedList">
+<a class="viewcode-back" href="../../../parsing.html#dynamicdl.parsing.impliedlist.ImpliedList">[docs]</a>
+<span class="k">class</span> <span class="nc">ImpliedList</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&#39;&#39;&#39;</span>
+<span class="sd">    The `ImpliedList` class is meant to pair its objects with their associated index. </span>
+<span class="sd">    Implied list, meant especially for pairing object. Allows the index of each item to be</span>
+<span class="sd">    associated with that object. This is especially useful for datasets such as the YOLOv8 set,</span>
+<span class="sd">    where list of class names are provided with their index inferred to be the class id.</span>
+<span class="sd">    &#39;&#39;&#39;</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">form</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">GenericList</span><span class="p">,</span> <span class="nb">list</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span> <span class="n">indexer</span><span class="p">:</span> <span class="n">DataType</span><span class="p">,</span> <span class="n">start</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">form</span> <span class="o">=</span> <span class="n">form</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">form</span><span class="p">,</span> <span class="n">GenericList</span><span class="p">)</span> <span class="k">else</span> <span class="n">GenericList</span><span class="p">(</span><span class="n">form</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">indexer</span> <span class="o">=</span> <span class="n">indexer</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">start</span> <span class="o">=</span> <span class="n">start</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">length</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">form</span><span class="o">.</span><span class="n">form</span><span class="p">)</span>
+
+<div class="viewcode-block" id="ImpliedList.expand">
+<a class="viewcode-back" href="../../../parsing.html#dynamicdl.parsing.impliedlist.ImpliedList.expand">[docs]</a>
+    <span class="k">def</span> <span class="nf">expand</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">path</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
+        <span class="n">dataset</span><span class="p">:</span> <span class="nb">list</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="n">Static</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
+<span class="w">        </span><span class="sd">&#39;&#39;&#39;</span>
+<span class="sd">        Expand implied list into dict of statics.</span>
+<span class="sd">        </span>
+<span class="sd">        :param dataset: The dataset data, which must be a list of values following some format.</span>
+<span class="sd">        :type dataset: list</span>
+<span class="sd">        :return: The parsed expansion of `Static` values, always a list. Single values are converted</span>
+<span class="sd">            to lists of length 1. Note: for consistency lists are converted to dicts with int keys.</span>
+<span class="sd">        :rtype: dict[int, Any]</span>
+<span class="sd">        &#39;&#39;&#39;</span>
+        <span class="kn">from</span> <span class="nn">.._main._engine</span> <span class="kn">import</span> <span class="n">expand_generics</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">dataset</span><span class="p">,</span> <span class="nb">list</span><span class="p">):</span>
+            <span class="n">Warnings</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s1">&#39;incorrect_type&#39;</span><span class="p">,</span> <span class="n">path</span><span class="o">=</span><span class="n">path</span><span class="p">,</span> <span class="n">got</span><span class="o">=</span><span class="nb">type</span><span class="p">(</span><span class="n">dataset</span><span class="p">))</span>
+
+        <span class="n">form</span> <span class="o">=</span> <span class="p">{</span><span class="bp">self</span><span class="o">.</span><span class="n">indexer</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">form</span><span class="p">}</span>
+        <span class="n">dataset</span> <span class="o">=</span> <span class="p">{</span><span class="nb">str</span><span class="p">(</span><span class="n">i</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">start</span><span class="p">):</span> <span class="n">dataset</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">length</span> <span class="o">*</span> <span class="n">i</span> <span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">length</span> <span class="o">*</span> <span class="p">(</span><span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)]</span>
+                   <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">dataset</span><span class="p">)</span> <span class="o">//</span> <span class="bp">self</span><span class="o">.</span><span class="n">length</span><span class="p">)}</span>
+        <span class="k">return</span> <span class="n">expand_generics</span><span class="p">(</span>
+            <span class="n">path</span><span class="p">,</span>
+            <span class="n">dataset</span><span class="p">,</span>
+            <span class="n">form</span>
+        <span class="p">)</span></div>
+</div>
+
+</pre></div>
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2024, Anthony Tong.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

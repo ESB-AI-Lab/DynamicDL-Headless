@@ -1,32 +1,10 @@
-'''
-Main module for processing datasets. Collects all parsed objects into the DynamicData object, and
-maintains the DynamicDL class for PyTorch Dataset and DataLoader functionalities.
-
-Collate functions (pseudo-private)
-
-DynamicData main class public functions:
- - parse()
- - get_transforms()
- - get_dataset()
- - get_dataloader()
- - get_image_set()
- - split_image_set()
- - clear_image_sets()
- - delete_image_set()
- - save()
- - load()
- - sample_image()
- - inference()
-
-DynamicDS class (VisionDataset extension)
-'''
 import os
 import time
 import json
 from hashlib import md5
 from functools import partial
 import random
-from typing import Union, Optional, Callable, Iterable, Tuple, Any
+from typing import Union, Optional, Callable, Iterable, Tuple
 
 import cv2
 from tqdm import tqdm
@@ -36,9 +14,8 @@ from pandas import DataFrame
 from pandas import isna
 from pandas.core.series import Series
 from torch.utils.data import DataLoader
-from torch import Tensor, LongTensor, FloatTensor
+from torch import FloatTensor
 import torch
-from torchvision.datasets.vision import VisionDataset
 from torchvision.utils import draw_bounding_boxes
 import torchvision.transforms.functional as F
 from torchvision import transforms as T
@@ -46,134 +23,47 @@ from PIL.Image import open as open_image
 import matplotlib.pyplot as plt
 from typing_extensions import Self
 
-from ._utils import next_avail_id, union, Warnings
-from .processing import populate_data
-from .transforms import Transforms
-
-def _collate_classification(batch):
-    images, labels = zip(*batch)
-    try:
-        return torch.stack(images), torch.IntTensor(list(labels))
-    except RuntimeError as e:
-        if 'stack expects each tensor to be equal size, but got' in str(e):
-            Warnings.error('invalid_shape', mode='classification')
-        raise
-
-def _collate_classification_dim(batch):
-    images, labels = zip(*batch)
-    labels = {'label': torch.IntTensor([label['label'] for label in labels]),
-              'dim': [label['dim'] for label in labels]}
-    try:
-        return torch.stack(images), labels
-    except RuntimeError as e:
-        if 'stack expects each tensor to be equal size, but got' in str(e):
-            Warnings.error('invalid_shape', mode='classification')
-        raise
-
-def _collate_detection(batch):
-    return list(zip(*batch))
-
-def _collate_detection_dim(batch):
-    images, labels = zip(*batch)
-    labels = {'label': torch.IntTensor([label['label'] for label in labels]),
-              'dim': [label['dim'] for label in labels]}
-    return tuple(images), tuple(labels)
-
-def _collate_segmentation(batch):
-    images, labels = zip(*batch)
-    try:
-        return torch.stack(images), torch.stack(labels)
-    except RuntimeError as e:
-        if 'stack expects each tensor to be equal size, but got' in str(e):
-            Warnings.error('invalid_shape', mode='segmentation')
-        raise
-
-def _collate_segmentation_dim(batch):
-    images, labels = zip(*batch)
-    labels = {'label': torch.stack([label['label'] for label in labels]),
-              'dim': [label['dim'] for label in labels]}
-    try:
-        return torch.stack(images), labels
-    except RuntimeError as e:
-        if 'stack expects each tensor to be equal size, but got' in str(e):
-            Warnings.error('invalid_shape', mode='segmentation')
-        raise
-
-def _collate_default(batch):
-    return list(zip(*batch))
-
-def _collate(mode: str, store_dim: bool) -> Callable:
-    '''
-    Getters for all preset collate functions.
-    '''
-    if mode == 'classification':
-        return _collate_classification_dim if store_dim else _collate_classification
-    if mode == 'segmentation':
-        return _collate_segmentation_dim if store_dim else _collate_segmentation
-    if mode == 'detection':
-        return _collate_detection_dim if store_dim else _collate_detection
-    return _collate_default
+from ._utils import next_avail_id, union, config
+from ._warnings import Warnings
+from ._main._engine import populate_data
+from ._main._transforms import Transforms
+from ._main._collate import _collate
+from .dynamicds import DynamicDS
 
 class DynamicData:
     '''
     Main dataset class. Accepts root directory path and dictionary form of the structure.
+    DynamicDL expands a generic dataset form and interprets it through a series of recursive
+    hierarchical inheritances, to flatten the dataset into a list of entries fit for image
+    processing.
     
-    Args:
-     - `root` (`str`): the root directory to access the dataset.
-     - `form` (`dict`): the form of the dataset. See documentation for further details on valid
-        forms.
-     - `bbox_scale_option` (`str`): choose from either 'auto', 'zeroone', or 'full' scale options to
-        define, or leave empty for automatic. Default: 'auto'
-     - `seg_scale_option` (`str`): choose from either 'auto', 'zeroone', or 'full' scale options to
-        define, or leave empty for automatic. Default: 'auto'
-     - `get_md5_hashes` (`bool`): when set to True, create a new column which finds md5 hashes for
-        each image available, and makes sure there are no duplicates. Default: False
-     - `purge_duplicates` (`Optional[bool]`): when set to True, remove all duplicate image entries.
-        Duplicate images are defined by having the same md5 hash, so this has no effect when
-        get_md5_hashes is False. When set to False, do not purge duplicates. Default: None
+    :param root: The root directory to access the dataset.
+    :type root: str
+    :param form: The form of the dataset. See documentation for further details on valid forms.
+    :type form: dict
+    :param bbox_scale_option: Choose from either `auto`, `zeroone`, or `full` scale options to
+        define, or leave empty for automatic. `zeroone` assumes detection coordinates to be
+        interpreted on a 0-1 scale as ratios dependent on image size. `full` leaves coordinates
+        as is. `auto` for auto-detection. Default: `auto`
+    :type bbox_scale_option: str
+    :param seg_scale_option: Choose from either `auto`, `zeroone`, or `full` scale options to
+        define, or leave empty for automatic. `zeroone` assumes segmentation coordinates to be
+        interpreted on a 0-1 scale as ratios dependent on image size. `full` leaves coordinates
+        as is. `auto` for auto-detection. Default: `auto`
+    :type seg_scale_option: str
+    :param get_md5_hashes: When set to True, create a new column which finds md5 hashes for each
+        image available, and makes sure there are no duplicates. Default: `False`
+    :type get_md5_hashes: bool
+    :param purge_duplicates: When set to True, remove all duplicate image entries. Duplicate images
+        are defined by having the same md5 hash, so this has no effect when `get_md5_hashes` is 
+        `False`. When set to `False`, do not purge duplicates. Default: `None`
+    :type purge_duplicates: Optional[bool]
     '''
 
-    _inference_cols = {'ABSOLUTE_FILE', 'IMAGE_ID', 'IMAGE_DIM'}
-    _diffusion_cols = {'ABSOLUTE_FILE', 'IMAGE_ID', 'IMAGE_DIM'}
-    _classification_cols = {'ABSOLUTE_FILE', 'IMAGE_ID', 'CLASS_ID', 'IMAGE_DIM'}
-    _detection_cols = {'ABSOLUTE_FILE', 'IMAGE_ID', 'BBOX_CLASS_ID', 'BOX', 'IMAGE_DIM'}
-    _segmentation_img_cols = {'ABSOLUTE_FILE', 'IMAGE_ID', 'ABSOLUTE_FILE_SEG', 'IMAGE_DIM'}
-    _segmentation_poly_cols = {'ABSOLUTE_FILE', 'IMAGE_ID', 'POLYGON', 'SEG_CLASS_ID', 'IMAGE_DIM'}
+    _modes: dict[str, set[str]] = config['MODES']
 
-    _BBOX_MODES = [
-        (
-            {'X1', 'X2', 'Y1', 'Y2'},
-            ('X1', 'Y1', 'X2', 'Y2'),
-            (lambda x: round(min(x[0], x[1]), 6), lambda y: round(min(y[0], y[1]), 6),
-             lambda x: round(max(x[0], x[1]), 6), lambda y: round(max(y[0], y[1]), 6))
-        ),
-        (
-            {'XMIN', 'YMIN', 'XMAX', 'YMAX'},
-            ('XMIN', 'YMIN', 'XMAX', 'YMAX'),
-            (lambda x: round(x[0], 6), lambda y: round(y[0], 6),
-             lambda x: round(x[1], 6), lambda y: round(y[1], 6))
-        ),
-        (
-            {'XMIN', 'YMIN', 'WIDTH', 'HEIGHT'},
-            ('XMIN', 'YMIN', 'WIDTH', 'HEIGHT'),
-            (lambda x: round(x[0], 6), lambda y: round(y[0], 6),
-             lambda x: round(x[0]+x[1], 6), lambda y: round(y[0]+y[1], 6))
-        ),
-        (
-            {'XMID', 'YMID', 'WIDTH', 'HEIGHT'},
-            ('XMID', 'YMID', 'WIDTH', 'HEIGHT'),
-            (lambda x: round(x[0]-x[1]/2, 6), lambda y: round(y[0]-y[1]/2, 6),
-             lambda x: round(x[0]+x[1]/2, 6), lambda y: round(y[0]+y[1]/2, 6))
-        ),
-        (
-            {'XMAX', 'YMAX', 'WIDTH', 'HEIGHT'},
-            ('XMAX', 'YMAX', 'WIDTH', 'HEIGHT'),
-            (lambda x: round(x[0]-x[1], 6), lambda y: round(y[0]-y[1], 6),
-             lambda x: round(x[0], 6), lambda y: round(y[0], 6))
-        )
-    ]
-    _BBOX_COLS = {'X1', 'X2', 'Y1', 'Y2', 'XMIN', 'XMAX', 'YMIN', 'YMAX', 'XMID', 'YMID', 'WIDTH',
-                  'HEIGHT', 'BBOX_CLASS_ID', 'BBOX_CLASS_NAME'}
+    _BBOX_MODES = config['BBOX_MODES']
+    _BBOX_COLS = config['BBOX_COLS']
 
     _scale_options = ('zeroone', 'full')
 
@@ -203,35 +93,41 @@ class DynamicData:
         self.bbox_scale_option = bbox_scale_option
         self.seg_scale_option = seg_scale_option
 
-    def parse(self, override: bool = False) -> None:
+    def parse(self, override: bool = False, verbose: bool = False) -> None:
         '''
         Must be called to instantiate the data in the dataset instance. Performs the recursive
         populate_data algorithm and creates the dataframe, and then cleans up the data.
         
-        Args:
-         - `override` (`bool`): whether to overwrite existing data if it has already been parsed and
-            cleaned. Default: False
+        :param override: Whether to overwrite existing data if it has already been parsed and
+            cleaned. Default: `False`
+        :type override: bool
+        :param verbose: Whether to show more details about the merging process. May have an impact
+            on runtime. Default: `False`
+        :type verbose: bool
         '''
         print('[DynamicData] Parsing data...')
         start = time.time()
         if self.cleaned and not override:
             Warnings.error('already_parsed')
-        data = populate_data(self.root, self.form)
+        data = populate_data(self.root, self.form, verbose=verbose)
         entries = [{key: val.value for key, val in item.data.items()} for item in data]
         self.dataframe = DataFrame(entries)
         end = time.time()
         print(f'[DynamicData] Parsed! ({(end - start):.3f}s)')
         start = time.time()
-        self._cleanup()
+        self._cleanup(verbose=verbose)
         end = time.time()
         print(f'[DynamicData] Cleaned! ({(end - start):.3f}s)')
         print(self._get_statistics())
 
-    def _cleanup(self) -> None:
+    def _cleanup(self, verbose: bool = False) -> None:
         '''
         Run cleanup and sanity checks on all data. Assigns IDs to name-only values.
         '''
         print('[DynamicData] Cleaning up data...')
+
+        if 'ABSOLUTE_FILE' not in self.dataframe:
+            Warnings.error('no_images')
 
         # sort by image id first to prevent randomness
         if 'IMAGE_ID' in self.dataframe:
@@ -247,9 +143,6 @@ class DynamicData:
         if self.get_md5_hashes:
             self._get_md5_hashes()
 
-        # drop generic as it is useless data
-        self.dataframe.drop(columns='GENERIC', inplace=True, errors='ignore')
-
         # convert bounding boxes into proper format and store under 'BOX'
         self._convert_bbox()
 
@@ -263,9 +156,9 @@ class DynamicData:
 
         # assign ids
         self._cleanup_id()
-        self._process_ids('CLASS', redundant=False)
-        self._process_ids('SEG_CLASS', redundant=True)
-        self._process_ids('BBOX_CLASS', redundant=True)
+        self._process_ids('CLASS', redundant=False, verbose=verbose)
+        self._process_ids('SEG_CLASS', redundant=True, verbose=verbose)
+        self._process_ids('BBOX_CLASS', redundant=True, verbose=verbose)
 
         # check available columns to determine mode availability
         self.available_modes = DynamicData._get_modes(self.dataframe)
@@ -276,18 +169,7 @@ class DynamicData:
 
     @staticmethod
     def _get_modes(df: DataFrame) -> list:
-        modes = []
-        if DynamicData._inference_cols.issubset(df.columns):
-            modes.append('inference')
-        if DynamicData._diffusion_cols.issubset(df.columns):
-            modes.append('diffusion')
-        if DynamicData._classification_cols.issubset(df.columns):
-            modes.append('classification')
-        if DynamicData._detection_cols.issubset(df.columns):
-            modes.append('detection')
-        if DynamicData._segmentation_img_cols.issubset(df.columns) or \
-            DynamicData._segmentation_poly_cols.issubset(df.columns):
-            modes.append('segmentation')
+        modes = [mode for mode, subset in DynamicData._modes.items() if subset.issubset(df.columns)]
         return modes
 
     def _get_statistics(self):
@@ -295,26 +177,19 @@ class DynamicData:
         data += f'       | Available modes: {", ".join(self.available_modes)}\n'
         data += f'       | Images: {len(self.dataframe)}\n'
         for mode in self.available_modes:
-            if mode != 'segmentation':
-                opt = ''
-            elif 'POLYGON' in self.dataframe.columns:
-                opt = 'poly_'
-            else:
-                opt = 'img_'
-            colset = f"_{mode}_{opt}cols"
-
             count = len(self.dataframe) - len(self.dataframe[
-                self.dataframe[list(getattr(self, colset))].isna().any(axis=1)
+                self.dataframe[list(DynamicData._modes[mode])].isna().any(axis=1)
             ])
             data += f'       | Complete entries for {mode}: {count}\n'
 
         if 'detection' in self.available_modes:
             data += f'       | Bounding box scaling option: {self.bbox_scale_option}\n'
-        if 'segmentation' in self.available_modes:
+        if ('segmentation_poly' in self.available_modes or 
+            'segmentation_mask' in self.available_modes):
             data += f'       | Segmentation object scaling option: {self.seg_scale_option}\n'
         return data.strip()
 
-    def _process_ids(self, name: str, redundant: bool = False) -> None:
+    def _process_ids(self, name: str, redundant: bool = False, verbose: bool = False) -> None:
         if f'{name}_NAME' in self.dataframe:
             if f'{name}_ID' not in self.dataframe:
                 call = partial(self._assign_ids, redundant=redundant)
@@ -338,7 +213,8 @@ class DynamicData:
             name,
             getattr(self, f'{name.lower()}_to_idx'),
             getattr(self, f'idx_to_{name.lower()}'),
-            redundant=redundant
+            redundant=redundant,
+            verbose=verbose
         )
 
     def _get_img_sizes(self) -> None:
@@ -376,7 +252,8 @@ class DynamicData:
             if self.bbox_scale_option == 'full':
                 print('[DynamicData] Detected full size bounding box scale option')
                 return
-            print('[DynamicData] Detected [0, 1] bounding box scale option to be converted to full size')
+            print('[DynamicData] Detected [0, 1] bounding box scale option to be converted to full '
+                  'size')
             self.bbox_scale_option = 'zeroone'
         if self.bbox_scale_option not in DynamicData._scale_options:
             Warnings.error('invalid_scale', scale=self.bbox_scale_option)
@@ -390,7 +267,8 @@ class DynamicData:
                     return
                 if any(coord < 0 for shape in shapes for coord in shape):
                     Warnings.error('invalid_scale_data', id=i)
-            print('[DynamicData] Detected [0, 1] segmentation scale option to be converted to full size')
+            print('[DynamicData] Detected [0, 1] segmentation scale option to be converted to full '
+                  'size')
             self.seg_scale_option = 'zeroone'
         if self.seg_scale_option not in DynamicData._scale_options:
             Warnings.error('invalid_scale', scale=self.seg_scale_option)
@@ -594,37 +472,44 @@ class DynamicData:
 
     def get_transforms(
         self,
-        mode: str,
+        mode: str = 'inference',
         calculate_stats: bool = True,
         mean: Tuple[float, ...] = (0.485, 0.456, 0.406),
         std: Tuple[float, ...] = (0.229, 0.224, 0.225),
         normalize: bool = True,
         remove_invalid: bool = True,
-        resize: Optional[tuple[int, int]] = None
+        resize: Optional[Tuple[int, ...]] = None
     ) -> Tuple[Optional[Callable], ...]:
         '''
         Retrieve the default standard image/label transforms for specified mode.
         
-        Args:
-         - `mode` (`str`): choose a mode out of available modes for the transforms. Each mode has
+        :param mode: Choose a mode out of available modes for the transforms. Each mode has
             slightly altered standard transforms.
-         - `calculate_stats` (`bool`): when set to True, calculate the statistics for the entire
+        :type mode: str
+        :param calculate_stats: When set to True, calculate the statistics for the entire
             dataset, overriding default mean/std kwarg (defaults from ImageNet). Use this feature
             when dataset mean/std is unknown and differs significantly from ImageNet. Default: True.
-         - `mean` (`Tuple[float, ...]`): default mean statistics for the dataset. Has no effect when
+        :type calculate_stats: bool
+        :param mean: Default mean statistics for the dataset. Has no effect when
             `calculate_stats = True`. Default: ImageNet values.
-         - `std` (`Tuple[float, ...]`): default mean statistics for the dataset. Has no effect when
+        :type mean: Tuple[float, ...]
+        :param std: Default mean statistics for the dataset. Has no effect when
             `calculate_stats = True`. Default: ImageNet values.
-         - `normalize` (`bool`): when set to True, normalize the dataset according to some
+        :type std: Tuple[float, ...]
+        :param normalize: When set to True, normalize the dataset according to some
             mean/std values, either from calculated stats or ImageNet default. This statement is
             overriden when `calculate_stats` is set to True. Default: True.
-         - `remove_invalid` (`bool`): remove invalid entries when calculating the statistics,
-            assuming `calculate_stats` is set to True. If `calculate_stats` is False, this value
-            has no effect. Default: True.
-         - `resize` (`Optional[tuple[int, int]]`): resize to specific tuple dimensions before
-            calculating statistics, only when `calculate_stats` is set to True, just like
-            `remove_invalid`. Default: None.
-        
+        :type normalize: bool
+        :param remove_invalid: Remove invalid entries when calculating the statistics, assuming
+            `calculate_stats` is set to `True`. If `calculate_stats` is `False`, this value has no
+            effect. Default: `True`.
+        :type remove_invalid: bool
+        :param resize: Resize to specific tuple dimensions before calculating statistics, only when
+            `calculate_stats` is set to True, just like `remove_invalid`. Default: `None`.
+        :type resize: Optional[Tuple[int, ...]]
+        :return: A tuple of two callable transforms, the first being the standard image transform
+            and the latter being the standard target transform.
+        :rtype: Tuple[Optional[Callable], ...]
         '''
         if not calculate_stats:
             return Transforms.get(mode, resize=resize, normalize=normalize, mean=mean, std=std)
@@ -664,7 +549,7 @@ class DynamicData:
 
     def get_dataset(
         self,
-        mode: str,
+        mode: str = 'inference',
         remove_invalid: bool = True,
         store_dim: bool = False,
         preset_transform: bool = True,
@@ -680,40 +565,50 @@ class DynamicData:
         normalize_to: Optional[str] = None
     ) -> 'DynamicDS':
         '''
-        Retrieve the PyTorch dataset (torch.utils.data.Dataset) of a specific mode and image set.
+        Retrieve the PyTorch dataset (`torch.utils.data.Dataset`) of a specific mode and image set.
         
-        Args:
-         - `mode` (`str`): the mode of training to select. See available modes with
-            `available_modes`.
-         - `remove_invalid` (`bool`): if set to True, deletes any NaN/corrupt items in the image set
+        :param mode: The mode of training to select. See available modes with `available_modes`.
+        :type mode: str
+        :param remove_invalid: If set to True, deletes any NaN/corrupt items in the image set
             pertaining to the relevant mode. In the False case, either NaN values are substituted
             with empty values or an error is thrown, depending on the mode selected.
-         - `store_dim` (`bool`): if set to True, the labels in the dataset will return a dict with
-            two keys. 'label' contains the standard PyTorch labels and 'dim' contains the image's
+        :type remove_invalid: bool
+        :param store_dim: If set to True, the labels in the dataset will return a dict with two
+            keys. `label` contains the standard PyTorch labels and `dim` contains the image's
             former dimensions.
-         - `preset_transform` (`bool`): whether to use default preset transforms. Consists of
-            normalization with either calculated mean of the dataset about to be used or standard
-            ImageNet statistics depending on `calculate_stats`. Default: True
-         - `calculate_stats` (`bool`): whether to calculate mean and std for this dataset to be used
-            in normalization transforms. If False, uses ImageNet default weights. Only has effect
-            when `preset_transform` is set to True. Default: True
-         - `mean` (`Tuple[float, ...]`): default mean statistics for the dataset. Has no effect when
+        :type store_dim: bool
+        :param preset_transform: Whether to use default preset transforms. Consists of normalization
+            with either calculated mean of the dataset about to be used or standard ImageNet
+            statistics depending on `calculate_stats`. Default: `True`
+        :type preset_transform: bool
+        :param calculate_stats: Whether to calculate mean and std for this dataset to be used in
+            normalization transforms. If False, uses ImageNet default weights. Only has effect
+            when `preset_transform` is set to `True`. Default: `True`
+        :type calculate_stats: bool
+        :param mean: Default mean statistics for the dataset. Has no effect when
             `calculate_stats = True`. Default: ImageNet values.
-         - `std` (`Tuple[float, ...]`): default mean statistics for the dataset. Has no effect when
+        :type mean: Tuple[float, ...]
+        :param std: Default mean statistics for the dataset. Has no effect when
             `calculate_stats = True`. Default: ImageNet values.
-         - `normalize` (`bool`): when set to True, normalize the dataset according to some
-            mean/std values, either from calculated stats or ImageNet default. This statement is
-            overriden when `calculate_stats` is set to True. Default: True.
-         - `image_set` (`Optional[str]`): the image set to pull from. Default: all images.
-         - `transform` (`Optional[Callable]`): the transform operation to apply to the images.
-         - `target_transform` (`Optional[Callable]`): the transform operation on the labels.
-         - `transforms` (`Optional[tuple[Optional[Callable], ...]]`): tuple in the format
-            `(transform, target_transform)`. Default PyTorch transforms are available in the
-            CVTransforms class.
-         - `resize` (`Optional[tuple[int, int]]`): if provided, resize all images to exact
-            configuration.
-         - `normalize_to` (`Optional[str]`): if provided, normalize bounding box/segmentation
-            coordinates to a specific configuration. Options: 'zeroone', 'full'
+        :type std: Tuple[float, ...]
+        :param normalize: When set to `True`, normalize the dataset according to some mean/std
+            values, either from calculated stats or ImageNet default. This statement is overriden
+            when `calculate_stats` is set to `True`. Default: `True`.
+        :type normalize: bool
+        :param image_set: The image set to pull from. Default: all images.
+        :type image_set: Optional[str]
+        :param transform: The transform operation to apply to the images.
+        :type transform: Optional[Callable]
+        :param target_transform: The transform operation to apply to the labels.
+        :type target_transform: Optional[Callable]
+        :param transforms: Tuple in the format `(transform, target_transform)`. Obtain default
+            transforms from `DynamicData.get_transforms()`, or supply your own.
+        :type transforms: Optional[Tuple[Optional[Callable], ...]]
+        :param resize: If provided, resize all images to exact `(width, height)` configuration.
+        :type resize: Optional[Tuple[int, ...]]
+        :param normalize_to: If provided, normalize bounding box/segmentation coordinates to a
+            specific configuration. Options: 'zeroone', 'full'
+        :type normalize_to: Optional[str]
         '''
         if not self.cleaned:
             self.parse()
@@ -741,23 +636,16 @@ class DynamicData:
         if len(dataframe) == 0:
             Warnings.error('image_set_missing', imgset_name=imgset_mode, image_set=image_set)
         normalization = None
+        dataframe = dataframe[list(DynamicData._modes[mode])]
         if mode == 'classification':
-            dataframe = dataframe[list(DynamicData._classification_cols)]
             id_mapping = {k: i for i, k in enumerate(self.idx_to_class)}
         elif mode == 'detection':
-            dataframe = dataframe[list(DynamicData._detection_cols)]
             normalization = self.bbox_scale_option
             id_mapping = {k: i for i, k in enumerate(self.idx_to_bbox_class)}
-        elif mode == 'segmentation':
-            dataframe = dataframe[list(DynamicData._segmentation_poly_cols if 'POLYGON' in
-                                       dataframe else DynamicData._segmentation_img_cols)]
+        elif mode == 'segmentation_mask' or mode == 'segmentation_poly':
             normalization = self.seg_scale_option
             id_mapping = {k: i for i, k in enumerate(self.idx_to_seg_class)}
-        elif mode == 'inference':
-            dataframe = dataframe[list(DynamicData._inference_cols)]
-            id_mapping = None
-        elif mode == 'diffusion':
-            dataframe = dataframe[list(DynamicData._diffusion_cols)]
+        elif mode == 'inference' or mode == 'diffusion':
             id_mapping = None
         if remove_invalid:
             dataframe = dataframe.dropna()
@@ -768,10 +656,11 @@ class DynamicData:
                 print(f'[DynamicData] Removed {start - end} empty entries from data.')
         else:
             replace_nan = (lambda x: ([] if isinstance(x, float) and isna(x) else x))
+            cols = []
             if mode == 'detection':
                 cols = ['BBOX_CLASS_ID'] # BOX already accounted for in bbox creation
-            elif mode == 'segmentation':
-                cols = ['POLYGON', 'SEG_CLASS_ID'] if 'POLYGON' in dataframe else []
+            elif mode == 'segmentation_poly':
+                cols = ['POLYGON', 'SEG_CLASS_ID']
             for col in cols:
                 dataframe[col] = dataframe[col].apply(replace_nan)
             for i, row in dataframe.iterrows():
@@ -782,16 +671,25 @@ class DynamicData:
 
         if len(dataframe) == 0:
             Warnings.error('image_set_empty', image_set=image_set)
-        return DynamicDS(dataframe, self.root, mode, id_mapping=id_mapping, transform=transform,
-                        target_transform=target_transform, resize=resize, store_dim=store_dim,
-                        normalize_to=normalize_to, normalization=normalization)
+        return DynamicDS(
+            dataframe,
+            self.root,
+            mode,
+            id_mapping=id_mapping,
+            transform=transform,
+            target_transform=target_transform,
+            resize=resize,
+            store_dim=store_dim,
+            normalize_to=normalize_to,
+            normalization=normalization
+        )
 
     def get_dataloader(
         self,
-        mode: str,
-        batch_size: int = 4,
+        mode: str = 'inference',
+        batch_size: int = 16,
         shuffle: bool = True,
-        num_workers: int = 1,
+        num_workers: int = 0,
         remove_invalid: bool = True,
         store_dim: bool = False,
         preset_transform: bool = True,
@@ -808,42 +706,55 @@ class DynamicData:
     ) -> DataLoader:
         '''
         Retrieve the PyTorch dataloader (torch.utils.data.DataLoader) for this dataset.
-        
-        Args:
-         - `mode` (`str`): the mode of training to select. See available modes with
-            `available_modes`.
-         - `batch_size` (`int`): the batch size of the image. Default: 4.
-         - `shuffle` (`bool`): whether to shuffle the data before loading. Default: True.
-         - `num_workers` (`int`): number of workers for the dataloader. Default: 1.
-         - `remove_invalid` (`bool`): if set to True, deletes any NaN/corrupt items in the image set
+            
+        :param mode: The mode of training to select. See available modes with `available_modes`.
+        :type mode: str
+        :param batch_size: The batch size of the image. Default: 16.
+        :type batch_size: int
+        :param shuffle: Whether to shuffle the data before loading. Default: `True`.
+        :type shuffle: bool
+        :param num_workers: Number of workers for the dataloader. Default: 0.
+        :type num_workers: int
+        :param remove_invalid: If set to True, deletes any NaN/corrupt items in the image set
             pertaining to the relevant mode. In the False case, either NaN values are substituted
             with empty values or an error is thrown, depending on the mode selected.
-         - `store_dim` (`bool`): if set to True, the labels in the dataset will return a dict with
-            two keys. 'label' contains the standard PyTorch labels and 'dim' contains the image's
+        :type remove_invalid: bool
+        :param store_dim: If set to True, the labels in the dataset will return a dict with two
+            keys. `label` contains the standard PyTorch labels and `dim` contains the image's
             former dimensions.
-         - `preset_transform` (`bool`): whether to use default preset transforms. Consists of
-            normalization with either calculated mean of the dataset about to be used or standard
-            ImageNet statistics depending on `calculate_stats`. Default: True
-         - `calculate_stats` (`bool`): whether to calculate mean and std for this dataset to be used
-            in normalization transforms. If False, uses ImageNet default weights. Only has effect
-            when `preset_transform` is set to True. Default: True
-         - `mean` (`Tuple[float, ...]`): default mean statistics for the dataset. Has no effect when
+        :type store_dim: bool
+        :param preset_transform: Whether to use default preset transforms. Consists of normalization
+            with either calculated mean of the dataset about to be used or standard ImageNet
+            statistics depending on `calculate_stats`. Default: `True`
+        :type preset_transform: bool
+        :param calculate_stats: Whether to calculate mean and std for this dataset to be used in
+            normalization transforms. If False, uses ImageNet default weights. Only has effect
+            when `preset_transform` is set to `True`. Default: `True`
+        :type calculate_stats: bool
+        :param mean: Default mean statistics for the dataset. Has no effect when
             `calculate_stats = True`. Default: ImageNet values.
-         - `std` (`Tuple[float, ...]`): default mean statistics for the dataset. Has no effect when
+        :type mean: Tuple[float, ...]
+        :param std: Default mean statistics for the dataset. Has no effect when
             `calculate_stats = True`. Default: ImageNet values.
-         - `normalize` (`bool`): when set to True, normalize the dataset according to some
-            mean/std values, either from calculated stats or ImageNet default. This statement is
-            overriden when `calculate_stats` is set to True. Default: True.
-         - `image_set` (`Optional[str]`): the image set to pull from. Default: all images.
-         - `transform` (`Optional[Callable]`): the transform operation to apply to the images.
-         - `target_transform` (`Optional[Callable]`): the transform operation on the labels.
-         - `transforms` (`Optional[tuple[Optional[Callable], ...]]`): tuple in the format
-            `(transform, target_transform)`. Default PyTorch transforms are available in the
-            CVTransforms class.
-         - `resize` (`Optional[tuple[int, int]]`): if provided, resize all images to exact
-            configuration.
-         - `normalize_to` (`Optional[str]`): if provided, normalize bounding box/segmentation
-            coordinates to a specific configuration. Options: 'zeroone', 'full'
+        :type std: Tuple[float, ...]
+        :param normalize: When set to True, normalize the dataset according to some mean/std values,
+            either from calculated stats or ImageNet default. This statement is overriden when
+            `calculate_stats` is set to T`rue. Default: `True`.
+        :type normalize: bool
+        :param image_set: The image set to pull from. Default: all images.
+        :type image_set: Optional[str]
+        :param transform: The transform operation to apply to the images.
+        :type transform: Optional[Callable]
+        :param target_transform: The transform operation to apply to the labels.
+        :type target_transform: Optional[Callable]
+        :param transforms: Tuple in the format `(transform, target_transform)`. Obtain default
+            transforms from `DynamicData.get_transforms()`, or supply your own.
+        :type transforms: Optional[Tuple[Optional[Callable], ...]]
+        :param resize: If provided, resize all images to exact `(width, height)` configuration.
+        :type resize: Optional[Tuple[int, ...]]
+        :param normalize_to: If provided, normalize bounding box/segmentation coordinates to a
+            specific configuration. Options: 'zeroone', 'full'
+        :type normalize_to: Optional[str]
         '''
         return DataLoader(
             self.get_dataset(
@@ -879,16 +790,19 @@ class DynamicData:
         set will receive the percentage that is missing from the rest of the sets, or deleted if
         the other sets add up to 1.
         
-        Args:
-         - `image_set` (`str | int`): the old image set name to split. Accepts both name and ID.
-         - `new_sets` (`tuple[str, float]`): each entry of new_sets has a name for the set
-            accompanied with a float to represent the percentage to split data into.
-         - `inplace` (`bool`): whether to perform the operation inplace on the existing image set.
-            If False, then the new sets are required to add up to exactly 100% of the compositions.
-            If True, any remaining percentages less than 100% will be filled back into the old image
-            set. Default: False.
-         - `seed` (`Optional[int]`): the seed to use for the operation, in case consistent dataset
-            manipulation in memory is required. Default: None
+        :param image_set: The old image set name to split. Accepts both name and ID.
+        :type image_set: str | int
+        :param new_sets: Each entry of `new_sets` has a name for the set accompanied with a float to
+            represent the percentage to split data into.
+        :type new_sets: Tuple[str, float]
+        :param inplace: Whether to perform the operation inplace on the existing image set. If
+            `False`, then the new sets are required to add up to exactly 100% of the compositions.
+            If `True`, any remaining percentages less than 100% will be filled back into the old
+            image set. Default: `False`.
+        :type inplace: bool
+        :param seed: The seed to use for the operation, in case consistent dataset manipulation
+            in memory is required. Default: `None`
+        :type seed: Optional[int]
         '''
         # checks before splitting
         mode = 'name' if isinstance(image_set, str) else 'id'
@@ -951,9 +865,9 @@ class DynamicData:
     ) -> DataFrame:
         '''
         Retrieve the sub-DataFrame which contains all images in a specific image set.
-        
-        Args:
-         - image_set (str, int): the image set. Accepts both string and int.
+
+        :param image_set: The image set. Accepts both string and int.
+        :type image_set: str | int
         '''
         if isinstance(image_set, str):
             return self.dataframe[self.dataframe['IMAGE_SET_NAME'].apply(lambda x: image_set in x)]
@@ -965,10 +879,10 @@ class DynamicData:
     ) -> None:
         '''
         Clear image sets from the dict if they contain no elements.
-        
-        Args:
-         - sets (list[str | int], Optional): If defined, only scan the provided list, otherwise
-            scan all sets. Default: None.
+
+        :param sets: If defined, only scan the provided list, otherwise scan all sets.
+            Default: `None`.
+        :type sets: list[str | int], Optional
         '''
         to_pop = []
         if sets is None:
@@ -992,9 +906,9 @@ class DynamicData:
         '''
         Delete image set from all entries. If an entry has only that image set, replace with the
         default dataset.
-        
-        Args:
-         - image_set (str, int): the image set to delete. Accepts both name and ID.
+
+        :param image_set: The image set to delete. Accepts both name and ID.
+        :type image_set: str | int
         '''
         using_id: bool = isinstance(image_set, int)
         if using_id:
@@ -1027,18 +941,20 @@ class DynamicData:
 
     def save(
         self,
-        filename: str,
+        filename: str = '',
         overwrite: bool = False,
         safe: bool = True
     ) -> None:
         '''
         Save the dataset into DynamicData json format.
-        
-        Args:
-         - filename (str): the filename to save the dataset.
-         - overwrite (bool): whether to overwrite the file if it already exists. Default: False.
-         - safe (bool): if True, do not encode `form` with jsonpickle. Then dataset cannot be
+
+        :param filename: The filename to save the dataset.
+        :type filename: str
+        :param overwrite: Whether to overwrite the file if it already exists. Default: `False`.
+        :type overwrite: bool
+        :param safe: If `True`, do not encode `form` with jsonpickle. Then dataset cannot be
             re-parsed, but is no longer subject to arbitrary code injection upon load.
+        :type safe: bool
         '''
         if not safe:
             Warnings.warn('unsafe_save')
@@ -1067,14 +983,14 @@ class DynamicData:
             f.write(json.dumps(this))
 
     @classmethod
-    def load(cls, filename: str) -> Self:
+    def load(cls, filename: str = '') -> Self:
         '''
-        Load a DynamicData object from file. Warning: do not load any json files that you did not create.
-        This method uses jsonpickle, an insecure loading system with potential for arbitrary Python
-        code execution.
-        
-        Args:
-         - filename (str): the filename to load the data from.
+        Load a DynamicData object from file. Warning: do not load any json files that you did not
+        create. This method uses jsonpickle, an insecure loading system with potential for arbitrary
+        Python code execution.
+
+        :param filename: The filename to load the data from.
+        :type filename: str
         '''
         try:
             print('[DynamicData] Loading dataset...')
@@ -1119,12 +1035,14 @@ class DynamicData:
     ) -> None:
         '''
         Sample an image from the dataset.
-        
-        Args:
-         - `dpi` (`float`): the image display size, if not in segmentation mode.
-         - `mode` (`Optional[str | list[str]]`): pick from any of the available modes, or supply a
-            list of modes. Default: all modes.
-         - `idx` (`Optional[int]`): use a specific idx from the dataset. Default: a random image.
+
+        :param dpi: The image display size, if not in segmentation mode.
+        :type dpi: float
+        :param mode: Pick from any of the available modes, or supply a list of modes. Default:
+            all modes.
+        :type mode: Optional[str | list[str]]
+        :param idx: Use a specific idx from the dataset. Default: a random image.
+        :type idx: Optional[int]
         '''
         if not self.cleaned:
             self.parse()
@@ -1153,201 +1071,23 @@ class DynamicData:
                     colors='red'
                 )
             else: print('[DynamicData] Warning: Image has no bounding boxes.')
-        if 'segmentation' in mode:
+        if 'segmentation_mask' in mode:
             _, axarr = plt.subplots(ncols=2)
             axarr[0].imshow(image.permute(1, 2, 0))
-            if 'ABSOLUTE_FILE_SEG' in item:
-                mask = F.to_tensor(open_image(item['ABSOLUTE_FILE_SEG']))
-                axarr[1].imshow(mask.permute(1, 2, 0))
-            else:
-                assert len(item['POLYGON']) == len(item['SEG_CLASS_ID']), \
-                    'SEG_CLASS_ID and POLYGON len mismatch'
-                mask = np.asarray(cv2.imread(item['ABSOLUTE_FILE'], cv2.IMREAD_GRAYSCALE))
-                mask = np.asarray(mask, dtype=np.int32)
-                mask = np.full_like(mask, next_avail_id(self.idx_to_seg_class))
-                for class_id, polygon in zip(item['SEG_CLASS_ID'], item['POLYGON']):
-                    mask = cv2.fillPoly(mask, pts=[np.asarray(polygon, dtype=np.int32)],
-                                    color=class_id)
-                mask = torch.from_numpy(np.asarray(mask))
-                axarr[1].imshow(mask)
-        else:
-            plt.imshow(image.permute(1, 2, 0))
-
-    def inference(
-        self,
-        image: torch.Tensor,
-        label: Any,
-        result: Any,
-        dpi: float = 1200,
-        mode: str = None
-    ) -> None:
-        '''
-        Plot an image output. Not implemented yet
-        '''
-        if not self.cleaned:
-            self.parse()
-        if mode is None:
-            Warnings.error('is_none', desc='Mode')
-        if mode not in self.available_modes:
-            Warnings.error('mode_unavailable', mode=mode)
-        plt.figure(dpi=dpi)
-        if mode == 'classification':
-            _, pred = torch.max(result, dim=1)
-            print(f'[DynamicData] Image Class ID/Name: {pred}/{self.idx_to_class[pred]}')
-        elif mode == 'detection':
-            boxes = result['boxes']
-            labels = result['labels']
-            if len(boxes) != 0:
-                image = draw_bounding_boxes(
-                    image,
-                    boxes,
-                    width=3,
-                    colors='red',
-                    labels=[self.idx_to_bbox_class[label] for label in labels]
-                )
-            else: print('[DynamicData] Warning: Image has no bounding boxes.')
-        if mode == 'segmentation':
-            _, axarr = plt.subplots(ncols=2)
-            axarr[0].imshow(image.permute(1, 2, 0))
-            mask = result['out'] if isinstance(result, dict) and 'out' in result else result
-            if not isinstance(mask, torch.Tensor):
-                raise ValueError('Cannot infer output mask tensor.')
-            mask = torch.argmax(mask, dim=1)
-            axarr[1].imshow(mask.permute(1, 2, 0))
-        else:
-            plt.imshow(image.permute(1, 2, 0))
-
-class DynamicDS(VisionDataset):
-    '''
-    Dataset implementation for the DynamicData environment.
-    
-    Args:
-    - `df` (`DataFrame`): the dataframe from DynamicData.
-    - `root` (`str`): the root of the dataset folder.
-    - `mode` (`str`): the mode of the data to retrieve, i.e. classification, segmentation, etc.
-    - `id_mapping` (`dict[int, int]`): the id mapping from the dataframe to retrieve class names.
-    This is used primarily as a safety feature in order to make sure that used IDs are provided
-    in order starting from 0 without holes so that training works properly.
-    - `image_type` (`str`): the type of the image to export, to convert PIL images to.
-    Default: 'RGB'. Also accepts 'L' and 'CMYK'.
-    - `normalization` (`str`): the type of normalization that the dataset currently is formatted in,
-    for box and polygon items. Accepts 'full' or 'zeroone'.
-    - `normalize_to` (`str`): the type of normalization that the dataset is to be resized to, for
-    box and polygon items. Accepts 'full' or 'zeroone'.
-    - `transform` (`Optional[Callable]`): the transform operation to apply to the images.
-    - `target_transform` (`Optional[Callable]`): the transform operation on the labels.
-    '''
-    def __init__(
-        self,
-        df: DataFrame,
-        root: str,
-        mode: str,
-        id_mapping: Optional[dict[int, int]],
-        image_type: str = 'RGB',
-        normalization: str = 'full',
-        store_dim: bool = False,
-        resize: Optional[tuple[int, int]] = None,
-        normalize_to: Optional[str] = None,
-        transform: Optional[Callable] = None,
-        target_transform: Optional[Callable] = None
-    ):
-        self.dataframe = df
-        self.data = self.dataframe.to_dict('records')
-        self.mode = mode
-        self.image_type = image_type
-        self.id_mapping = id_mapping
-        self.store_dim = store_dim
-        self.resize = resize
-        self.normalize_to = normalize_to
-        self.normalization = normalization
-        if self.mode == 'segmentation':
-            self.default = len(self.id_mapping)
-        super().__init__(
-            root,
-            transforms=None,
-            transform=transform,
-            target_transform=target_transform
-        )
-
-    def __len__(self):
-        return len(self.dataframe)
-
-    def _get_class_labels(self, item: Series) -> Tensor:
-        return self.id_mapping[int(item['CLASS_ID'])]
-
-    def _get_bbox_labels(self, item: Series) -> dict[str, Tensor]:
-        # execute checks
-        assert len(item['BOX']) == len(item['BBOX_CLASS_ID']), \
-            'BOX and BBOX_CLASS_ID len mismatch'
-        class_ids = list(map(lambda x: self.id_mapping[x], item['BBOX_CLASS_ID']))
-        boxes = item['BOX']
-        if self.resize:
-            factor_resize = self.resize
-        else:
-            factor_resize = (1, 1)
-        if self.normalization == 'full':
-            factor_norm = item['IMAGE_DIM']
-        else:
-            factor_norm = (1, 1)
-        apply_resize = lambda p: (p[0] * factor_resize[0] / factor_norm[0],
-                                  p[1] * factor_resize[1] / factor_norm[1],
-                                  p[2] * factor_resize[0] / factor_norm[0],
-                                  p[3] * factor_resize[1] / factor_norm[1])
-        bbox_tensors = [FloatTensor(apply_resize(box)) for box in boxes]
-        if not bbox_tensors:
-            Warnings.error('empty_bbox', file=item['ABSOLUTE_FILE'])
-        if self.store_dim:
-            return {
-                'label': {'boxes': torch.stack(bbox_tensors), 'labels': LongTensor(class_ids)},
-                'dim': item['IMAGE_DIM']
-            }
-        return {'boxes': torch.stack(bbox_tensors), 'labels': LongTensor(class_ids)}
-
-    def _get_seg_labels(self, item: Series) -> Tensor:
-        if 'ABSOLUTE_FILE_SEG' in item:
             mask = F.to_tensor(open_image(item['ABSOLUTE_FILE_SEG']))
-            if self.resize:
-                return F.resize(mask, [self.resize[1], self.resize[0]])
-            return mask
-        assert len(item['POLYGON']) == len(item['SEG_CLASS_ID']), \
-            'SEG_CLASS_ID and POLYGON len mismatch'
-        if self.resize is not None:
-            mask = np.full(self.resize, self.default, dtype=np.int32)
-            factor_resize = self.resize
+            axarr[1].imshow(mask.permute(1, 2, 0))
+        if 'segmentation_poly' in mode:
+            _, axarr = plt.subplots(ncols=2)
+            axarr[0].imshow(image.permute(1, 2, 0))
+            assert len(item['POLYGON']) == len(item['SEG_CLASS_ID']), \
+                'SEG_CLASS_ID and POLYGON len mismatch'
+            mask = np.asarray(cv2.imread(item['ABSOLUTE_FILE'], cv2.IMREAD_GRAYSCALE))
+            mask = np.asarray(mask, dtype=np.int32)
+            mask = np.full_like(mask, next_avail_id(self.idx_to_seg_class))
+            for class_id, polygon in zip(item['SEG_CLASS_ID'], item['POLYGON']):
+                mask = cv2.fillPoly(mask, pts=[np.asarray(polygon, dtype=np.int32)],
+                                color=class_id)
+            mask = torch.from_numpy(np.asarray(mask))
+            axarr[1].imshow(mask)
         else:
-            mask = np.full(item['IMAGE_DIM'], self.default, dtype=np.int32)
-            factor_resize = (1, 1)
-        if self.normalization == 'full':
-            factor_norm = item['IMAGE_DIM']
-        else: factor_norm = (1, 1)
-        apply_resize = lambda p: (p[0] * factor_resize[0] / factor_norm[0],
-                                  p[1] * factor_resize[1] / factor_norm[1])
-        for class_id, polygon in zip(item['SEG_CLASS_ID'], item['POLYGON']):
-            if self.resize is not None:
-                polygon = list(map(apply_resize, polygon))
-            mask = cv2.fillPoly(mask, pts=[np.asarray(polygon, dtype=np.int32)],
-                            color=self.id_mapping[class_id])
-        mask = torch.from_numpy(np.asarray(mask)).unsqueeze(-1).permute(2, 0, 1)
-        return mask
-
-    def __getitem__(self, idx):
-        item: dict = self.data[idx]
-        image: Tensor = F.to_tensor(open_image(item.get('ABSOLUTE_FILE')).convert(self.image_type))
-        if self.resize:
-            image = F.resize(image, [self.resize[1], self.resize[0]])
-        label: dict[str, Tensor]
-        if self.mode in {'inference', 'diffusion'}:
-            if self.transform:
-                image = self.transform(image)
-            return image, {'dim': item['IMAGE_DIM']}
-        if self.mode == 'classification':
-            label = self._get_class_labels(item)
-        elif self.mode == 'detection':
-            label = self._get_bbox_labels(item)
-        elif self.mode == 'segmentation':
-            label = self._get_seg_labels(item)
-        if self.transforms:
-            image, label = self.transforms(image, label)
-        if self.store_dim:
-            return image, {'label': label, 'dim': item['IMAGE_DIM']}
-        return image, label
+            plt.imshow(image.permute(1, 2, 0))

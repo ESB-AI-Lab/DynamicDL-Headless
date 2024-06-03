@@ -1,0 +1,55 @@
+Parsing Structures
+==================
+
+.. automodule:: dynamicdl.parsing.alias
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: dynamicdl.parsing.ambiguouslist
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: dynamicdl.parsing.generic
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: dynamicdl.parsing.genericlist
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: dynamicdl.parsing.impliedlist
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: dynamicdl.parsing.namespace
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: dynamicdl.parsing.pairing
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: dynamicdl.parsing.segmentationobject
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: dynamicdl.parsing.static
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Module contents
+---------------
+
+.. automodule:: dynamicdl.parsing
+   :members:
+   :undoc-members:
+   :show-inheritance:
