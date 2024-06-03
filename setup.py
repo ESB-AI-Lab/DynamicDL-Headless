@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='dynamicdl',
+    name='dynamicdl-headless',
     version='0.1.1-alpha',
     packages=find_packages(),
     license='Apache License 2.0',
